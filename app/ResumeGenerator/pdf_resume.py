@@ -32,7 +32,7 @@ CONTACT = ParagraphStyle("contact", fontName="Times-Roman", fontSize=10, leading
 SECTION = ParagraphStyle("section", fontName="Times-Bold", fontSize=12.5, leading=15, textColor=INK, spaceBefore=7)
 HEAD_L = ParagraphStyle("head_l", fontName="Times-Bold", fontSize=11.5, leading=14, textColor=INK)
 HEAD_R = ParagraphStyle("head_r", fontName="Times-Bold", fontSize=10, leading=14, textColor=INK, alignment=2)
-BODY = ParagraphStyle("body", fontName="Times-Roman", fontSize=10, leading=12.5, textColor=INK)
+BODY = ParagraphStyle("body", fontName="Times-Roman", fontSize=9.8, leading=11.8, textColor=INK)
 SKILL = ParagraphStyle("skill", parent=BODY, leftIndent=0, spaceAfter=2)
 
 
@@ -87,9 +87,16 @@ def _contact_lines(user: Dict) -> List[str]:
     return ["&nbsp;&nbsp;|&nbsp;&nbsp;".join(items[i:i + 3]) for i in range(0, len(items), 3)]
 
 
-def _section(title: str, width: float) -> list:
-    return [Paragraph(clean(title.upper()), SECTION),
+def _section(title: str, width: float, entries: List[tuple]) -> list:
+    """Heading + rule + the lead (title row and first bullet) of the first entry always share a page."""
+    head = [Paragraph(clean(title.upper()), SECTION),
             HRFlowable(width=width, thickness=0.8, color=INK, spaceBefore=1, spaceAfter=4)]
+    if not entries:
+        return head
+    out = [KeepTogether(head + entries[0][0])] + entries[0][1]
+    for lead, tail in entries[1:]:
+        out += [KeepTogether(lead)] + tail
+    return out
 
 
 def _bullets(lines: List[str]) -> Optional[ListFlowable]:
@@ -107,27 +114,33 @@ def _heading(left: str, right: str, width: float) -> Table:
     return table
 
 
-def _entry(left: str, right: str, lines: List[str], width: float, extra_first: Optional[str] = None) -> list:
-    """One heading row plus its bullet list. The heading stays on the same page as the first bullet."""
-    all_lines = ([extra_first] if extra_first else []) + list(lines)
-    bullets = _bullets(all_lines)
-    head = _heading(left, right, width)
-    out = [KeepTogether([head, bullets]) if bullets else head]
-    out.append(Spacer(1, 4))
-    return out
+def _entry(left: str, right: str, lines: List[str], width: float, extra_first: Optional[str] = None) -> tuple:
+    """One heading row plus bullets, as (lead, tail). The lead (heading + first bullet) is never split from each other;
+    the remaining bullets may continue on the next page."""
+    all_lines = [l for l in ([extra_first] if extra_first else []) + list(lines) if l and l.strip()]
+    first, rest = _bullets(all_lines[:1]), _bullets(all_lines[1:])
+    lead = [_heading(left, right, width)] + ([first] if first else [])
+    tail = ([rest] if rest else []) + [Spacer(1, 3)]
+    return lead, tail
 
 
 def _dates(start, end) -> str:
     return f"{format_date(start)} – {format_date(end)}"
 
 
+# Concise (default) resume: the most recent projects, the two latest degrees, and no certification list.
+# Pass full=True to include everything stored in the portfolio.
+CONCISE_MAX_PROJECTS = 4
+CONCISE_MAX_EDUCATION = 2
+
+
 def build_resume_pdf(user_data: Dict, experiences: List[Dict], educations: List[Dict], projects: List[Dict],
-                     skills: List[Dict], certifications: List[Dict], awards: List[Dict]) -> bytes:
+                     skills: List[Dict], certifications: List[Dict], awards: List[Dict], full: bool = False) -> bytes:
     buffer = BytesIO()
-    margin = 0.55 * inch
+    margin = 0.5 * inch
     name = _full_name(user_data) or "Resume"
-    doc = SimpleDocTemplate(buffer, pagesize=letter, leftMargin=margin, rightMargin=margin, topMargin=0.5 * inch,
-                            bottomMargin=0.5 * inch, title=f"{name} - Resume", author=name)
+    doc = SimpleDocTemplate(buffer, pagesize=letter, leftMargin=margin, rightMargin=margin, topMargin=0.45 * inch,
+                            bottomMargin=0.45 * inch, title=f"{name} - Resume", author=name)
     width = doc.width  # usable frame width (page minus margins and frame padding)
     story: list = [Paragraph(clean(name.upper()), NAME)]
 
@@ -141,41 +154,42 @@ def build_resume_pdf(user_data: Dict, experiences: List[Dict], educations: List[
         by_category: Dict[str, List[str]] = {}
         for skill in skills:
             by_category.setdefault(skill.get("category") or "Other", []).append(skill.get("name", ""))
-        story += _section("Technical Skills", width)
-        for category, names in by_category.items():
-            story.append(Paragraph(f"<b>{clean(category)}:</b> {', '.join(clean(n) for n in names)}", SKILL))
+        lines = [([Paragraph(f"<b>{clean(category)}:</b> {', '.join(clean(n) for n in names)}", SKILL)], [])
+                 for category, names in by_category.items()]
+        story += _section("Technical Skills", width, lines)
+
+    def lines_of(item: Dict) -> List[str]:
+        return (item.get("description") or "").split("\n")
+
+    newest_first = lambda items: sorted(items, key=lambda x: _sort_key(x.get("start_date")), reverse=True)
 
     if experiences:
-        story += _section("Experience", width)
-        for e in sorted(experiences, key=lambda x: _sort_key(x.get("start_date")), reverse=True):
-            story += _entry(f"{e.get('title', '')} ({e.get('company', '')})", _dates(e.get("start_date"), e.get("end_date")),
-                            (e.get("description") or "").split("\n"), width)
-
-    if educations:
-        story += _section("Education", width)
-        for e in sorted(educations, key=lambda x: _sort_key(x.get("start_date")), reverse=True):
-            degree = e.get("degree")
-            story += _entry(e.get("institution", ""), _dates(e.get("start_date"), e.get("end_date")),
-                            (e.get("description") or "").split("\n"), width, extra_first=degree)
+        story += _section("Experience", width, [
+            _entry(f"{e.get('title', '')} ({e.get('company', '')})", _dates(e.get("start_date"), e.get("end_date")), lines_of(e), width)
+            for e in newest_first(experiences)])
 
     if projects:
-        story += _section("Projects", width)
-        for p in sorted(projects, key=lambda x: _sort_key(x.get("start_date")), reverse=True):
+        def tech_line(p: Dict) -> Optional[str]:
             tech = ", ".join(str(t) for t in (p.get("technologies") or []))
-            story += _entry(p.get("title", ""), _dates(p.get("start_date"), p.get("end_date")),
-                            (p.get("description") or "").split("\n"), width, extra_first=f"Technologies: {tech}" if tech else None)
+            return f"Technologies: {tech}" if tech else None
+        story += _section("Projects", width, [
+            _entry(p.get("title", ""), _dates(p.get("start_date"), p.get("end_date")), lines_of(p), width, extra_first=tech_line(p))
+            for p in newest_first(projects)[:None if full else CONCISE_MAX_PROJECTS]])
+
+    if educations:
+        story += _section("Education", width, [
+            _entry(e.get("institution", ""), _dates(e.get("start_date"), e.get("end_date")), lines_of(e), width, extra_first=e.get("degree"))
+            for e in newest_first(educations)[:None if full else CONCISE_MAX_EDUCATION]])
 
     if awards:
-        story += _section("Achievements", width)
-        for a in awards:
-            story += _entry(f"{a.get('name', '')} ({a.get('issuer', '')})", format_date(a.get("issue_date")),
-                            (a.get("description") or "").split("\n"), width)
+        story += _section("Achievements", width, [
+            _entry(f"{a.get('name', '')} ({a.get('issuer', '')})", format_date(a.get("issue_date")), lines_of(a), width)
+            for a in awards])
 
-    if certifications:
-        story += _section("Certifications", width)
-        for c in certifications:
-            story += _entry(f"{c.get('name', '')} ({c.get('issuer', '')})", format_date(c.get("issue_date")),
-                            (c.get("description") or "").split("\n"), width)
+    if certifications and full:
+        story += _section("Certifications", width, [
+            _entry(f"{c.get('name', '')} ({c.get('issuer', '')})", format_date(c.get("issue_date")), lines_of(c), width)
+            for c in certifications])
 
     doc.build(story)
     return buffer.getvalue()

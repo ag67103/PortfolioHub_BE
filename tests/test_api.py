@@ -302,3 +302,8 @@ def test_resume_pdf(client, alice):
     r = client.get(f"/resume/latex?user_id={alice['id']}")
     assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
     assert r.content.startswith(b"%PDF") and "Resume.pdf" in r.headers["content-disposition"]
+    # full=true adds the sections the concise resume leaves out (e.g. certifications)
+    client.post("/certifications", json={"name": "AWS", "issuer": "Amazon", "issue_date": "2023-05-01", "description": "d"}, headers=alice["headers"])
+    concise = client.get(f"/resume/latex?user_id={alice['id']}").content
+    full = client.get(f"/resume/latex?user_id={alice['id']}&full=true")
+    assert full.status_code == 200 and len(full.content) > len(concise)

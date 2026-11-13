@@ -19,7 +19,9 @@ from app.models.base import to_dict
 router = APIRouter()
 
 @router.get('/latex')
-async def get_resume_latex(user_id: UUID = Query(..., description="User ID for the resume to generate"), db: AsyncSession = Depends(get_db)):
+async def get_resume_latex(user_id: UUID = Query(..., description="User ID for the resume to generate"),
+                           full: bool = Query(False, description="Include every project, school and certification (default: concise resume)"),
+                           db: AsyncSession = Depends(get_db)):
     """
     Generate and download the resume PDF (ReportLab) for the specified user.
     The path still says `latex` for backwards compatibility with the frontend.
@@ -102,7 +104,8 @@ async def get_resume_latex(user_id: UUID = Query(..., description="User ID for t
             projects=projects_data,
             skills=skills_data,
             certifications=certifications_data,
-            awards=awards_data
+            awards=awards_data,
+            full=full
         )
 
         # Generate filename — strip characters that could break the Content-Disposition header
