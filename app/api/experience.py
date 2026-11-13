@@ -1,76 +1,45 @@
-from fastapi import APIRouter, Depends, HTTPException
 from typing import List
+from uuid import UUID
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api._helpers import apply_update, error, get_owned
+from app.db.database import get_db
 from app.models.experience import Experience
-from app.schemas.experience import ExperienceCreate, ExperienceUpdate
-from app.utils.auth import get_current_user
 from app.models.user import User
-from datetime import datetime, timezone
-from bson import ObjectId
-from app.schemas.error import Error
-from beanie import PydanticObjectId
+from app.schemas.experience import ExperienceCreate, ExperienceUpdate, ExperienceResponse
+from app.utils.auth import get_current_user
 
 router = APIRouter()
 
 # get experiences by user id
-@router.get('/experiences/user/{user_id}', response_model=List[Experience])
-async def read_experiences_by_user(user_id: PydanticObjectId):
-    experiences = await Experience.find(Experience.user_id == user_id).to_list()
-    experiences.sort(key=lambda x: x.end_date if x.end_date else x.start_date, reverse=True)
-    return experiences
+@router.get('/experiences/user/{user_id}', response_model=List[ExperienceResponse])
+async def read_experiences_by_user(user_id: UUID, db: AsyncSession = Depends(get_db)):
+    items = (await db.execute(select(Experience).where(Experience.user_id == user_id))).scalars().all()
+    # newest first: end_date if available, else start_date
+    items = sorted(items, key=lambda x: x.end_date if x.end_date else x.start_date, reverse=True)
+    return items
 
 # create experience
-@router.post('/experiences', response_model=Experience)
-async def create_experience(experience: ExperienceCreate, current_user: User = Depends(get_current_user)):
-    new_experience = {**experience.model_dump(), 'user_id': current_user.id}
-    experience_created = await Experience(**new_experience).insert()
-    return experience_created
+@router.post('/experiences', response_model=ExperienceResponse)
+async def create_experience(item: ExperienceCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    new_item = Experience(**item.model_dump(), user_id=current_user.id)
+    db.add(new_item)
+    await db.commit()
+    return new_item
 
 # update experience
-@router.put('/experiences/{experience_id}', response_model=Experience)
-async def update_experience(experience_id: str, experience: ExperienceUpdate, current_user: User = Depends(get_current_user)):
-    updated_experience = await Experience.get(experience_id)
-    if updated_experience is None:
-        raise HTTPException(
-            status_code=404, 
-            detail=Error(
-                message='Experience not found', 
-                status_code=404
-            ).model_dump()
-        )
-    if updated_experience.user_id != ObjectId(current_user.id):
-        raise HTTPException(
-            status_code=403, 
-            detail=Error(
-                message='You are not allowed to update this experience', 
-                status_code=403
-            ).model_dump()
-        )
-    update_data = experience.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(updated_experience, key, value)
-    updated_experience.updated_at = datetime.now(timezone.utc) # type: ignore
-    await updated_experience.save()
-    return updated_experience
+@router.put('/experiences/{item_id}', response_model=ExperienceResponse)
+async def update_experience(item_id: UUID, item: ExperienceUpdate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    target = await get_owned(db, Experience, item_id, current_user, 'Experience', 'update')
+    return await apply_update(db, target, item.model_dump(exclude_unset=True))
 
 # delete experience
-@router.delete('/experiences/{experience_id}', response_model=dict)
-async def delete_experience(experience_id: str, current_user: User = Depends(get_current_user)):
-    target_experience = await Experience.get(experience_id)
-    if target_experience is None:
-        raise HTTPException(
-            status_code=404, 
-            detail=Error(
-                message='Experience not found', 
-                status_code=404
-            ).model_dump()
-        )
-    if target_experience.user_id != ObjectId(current_user.id):
-        raise HTTPException(
-            status_code=403, 
-            detail=Error(
-                message='You are not allowed to delete this experience', 
-                status_code=403
-            ).model_dump()
-        )
-    await target_experience.delete()
+@router.delete('/experiences/{item_id}', response_model=dict)
+async def delete_experience(item_id: UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    target = await get_owned(db, Experience, item_id, current_user, 'Experience', 'delete')
+    await db.delete(target)
+    await db.commit()
     return {'message': 'Experience deleted successfully'}

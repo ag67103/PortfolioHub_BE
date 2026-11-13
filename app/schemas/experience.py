@@ -1,7 +1,8 @@
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import date, datetime
-from beanie import PydanticObjectId
+from uuid import UUID
+from app.schemas.base import ItemResponse
 
 class ExperienceBase(BaseModel):
     title: str
@@ -22,8 +23,6 @@ class ExperienceUpdate(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
 
-class Experience(ExperienceBase):
-    id: PydanticObjectId
+class ExperienceResponse(ItemResponse, ExperienceBase):
     created_at: datetime
     updated_at: datetime
-    user_id: PydanticObjectId

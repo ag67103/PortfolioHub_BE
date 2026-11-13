@@ -1,8 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.websockets import WebSocket
 from app.api import projects, skills, experience, educations, certifications, awards, about as portfolio, auth, user, message, resume
-from app.db.mongodb import init_db
 from app.utils.token_cleanup import cleanup_expired_access_tokens
 from app.config import settings
 from contextlib import asynccontextmanager
@@ -31,9 +29,7 @@ async def periodic_cleanup(interval_minutes: int = 1440):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    await init_db()
-    
+    # Startup (schema is managed by Alembic: `alembic upgrade head`)
     # Clean up expired tokens on startup
     try:
         deleted_count = await cleanup_expired_access_tokens()

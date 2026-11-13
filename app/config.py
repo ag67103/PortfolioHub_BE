@@ -5,8 +5,7 @@ import os
 
 class Settings(BaseSettings):
     # Database settings
-    mongodb_url: str = "mongodb://localhost:27017"
-    database_name: str = "portfolio"
+    database_url: str = "postgresql://postgres:postgres@localhost:5432/portfolio"
     
     # JWT settings
     secret_key: str = "your-secret-key-here"
@@ -14,12 +13,22 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     
     # CORS settings - can be set via environment variable as JSON array or comma-separated
-    cors_origins: List[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:3002", "http://127.0.0.1:3000", "http://127.0.0.1:3002"]
     
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"  # tolerate leftover variables such as MONGODB_URL
     
+    @property
+    def async_database_url(self) -> str:
+        """DATABASE_URL as given by the platform (postgres:// or postgresql://), converted for asyncpg."""
+        url = self.database_url
+        for prefix in ("postgresql+asyncpg://", "postgresql://", "postgres://"):
+            if url.startswith(prefix):
+                return "postgresql+asyncpg://" + url[len(prefix):]
+        return url
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Handle CORS_ORIGINS from environment variable

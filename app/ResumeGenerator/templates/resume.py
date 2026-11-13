@@ -5,9 +5,8 @@ import yaml
 
 class Resume:
     def get_full_name(self, user_data: Dict) -> str:
-        full_name_list = [user_data.get('first_name', ''), user_data.get('middle_name', ''), user_data.get('last_name', '')]
-        full_name_list.remove('') if '' in full_name_list else full_name_list
-        return ' '.join(full_name_list)
+        full_name_list = [user_data.get('first_name') or '', user_data.get('middle_name') or '', user_data.get('last_name') or '']
+        return ' '.join(part for part in full_name_list if part)
 
     def getVerticalSpacing(self, spacing: int) -> str:
         return "\\vspace{" + str(spacing) + "}\n\n"
@@ -131,7 +130,7 @@ class Resume:
             education_body += "            {}{}\n"
             education_body += self.getVerticalSpacing(config['SPACE_BETWEEN_SUB_SECTION_ITEM_TITLE_AND_CONTENT'])
             education_body += "        \\resumeItemListStart\n"
-            for i, subdesc in enumerate(education.get('description', '').split('\n')):
+            for i, subdesc in enumerate((education.get('description') or '').split('\n')):
                 if i > 0:
                     education_body += self.getVerticalSpacing(config['SPACE_BETWEEN_SUB_SECTION_BULLET_POINTS'])
                 if subdesc.strip():
@@ -183,7 +182,7 @@ class Resume:
             achievement_body += "            {}{}\n"
             achievement_body += self.getVerticalSpacing(config['SPACE_BETWEEN_SUB_SECTION_ITEM_TITLE_AND_CONTENT'])
             achievement_body += "        \\resumeItemListStart\n"
-            for i, subdesc in enumerate(award.get('description', '').split('\n')):
+            for i, subdesc in enumerate((award.get('description') or '').split('\n')):
                 if i > 0:
                     achievement_body += self.getVerticalSpacing(config['SPACE_BETWEEN_SUB_SECTION_BULLET_POINTS'])
                 if subdesc.strip():
@@ -206,7 +205,7 @@ class Resume:
             certification_body += "            {}{}\n"
             certification_body += self.getVerticalSpacing(config['SPACE_BETWEEN_SUB_SECTION_ITEM_TITLE_AND_CONTENT'])
             certification_body += "        \\resumeItemListStart\n"
-            for i, subdesc in enumerate(certification.get('description', '').split('\n')):
+            for i, subdesc in enumerate((certification.get('description') or '').split('\n')):
                 if i > 0:
                     certification_body += self.getVerticalSpacing(config['SPACE_BETWEEN_SUB_SECTION_BULLET_POINTS'])
                 if subdesc.strip():

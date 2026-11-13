@@ -32,8 +32,9 @@ RUN useradd -m -u 1000 appuser && \
 # Switch to non-root user before running (security best practice)
 USER appuser
 
-# Expose port (Render will set PORT env var)
+# Port the app listens on. Set "Container port" to 8000 on the Thikana service.
 EXPOSE 8000
 
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Apply database migrations, then start the API.
+# --proxy-headers: behind the Thikana proxy, so request.client.host is the real visitor IP (used by the rate limiter)
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'"]

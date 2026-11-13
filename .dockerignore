@@ -1,0 +1,17 @@
+venv/
+.venv/
+.env
+.env.*
+.git/
+.gitignore
+__pycache__/
+**/__pycache__/
+*.pyc
+*.db
+*.sqlite
+.DS_Store
+.vscode/
+tests/
+scripts/
+start.sh
+README.md

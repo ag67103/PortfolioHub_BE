@@ -13,3 +13,4 @@ __pycache__/
 test.db
 .DS_Store
 .vscode/
+!.env.example

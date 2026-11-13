@@ -1,86 +1,48 @@
 from typing import List
-from fastapi import APIRouter
-from fastapi import Depends, HTTPException
+from uuid import UUID
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api._helpers import apply_update, error, get_owned
+from app.db.database import get_db
 from app.models.skill import Skill
-from app.schemas.skill import SkillCreate, SkillUpdate
-from app.utils.auth import get_current_user
-from datetime import datetime, timezone
 from app.models.user import User
-from bson import ObjectId
-from app.schemas.error import Error
-from beanie import PydanticObjectId
+from app.schemas.skill import SkillCreate, SkillUpdate, SkillResponse
+from app.utils.auth import get_current_user
 
 router = APIRouter()
 
 # get skills by user id
-@router.get('/skills/user/{user_id}', response_model=List[Skill])
-async def read_skills_by_user(user_id: PydanticObjectId):
-    return await Skill.find(Skill.user_id == user_id).to_list()
+@router.get('/skills/user/{user_id}', response_model=List[SkillResponse])
+async def read_skills_by_user(user_id: UUID, db: AsyncSession = Depends(get_db)):
+    items = (await db.execute(select(Skill).where(Skill.user_id == user_id))).scalars().all()
+    return items
 
 # create skill
-@router.post('/skills', response_model=Skill)
-async def create_skill(skill: SkillCreate, current_user: User = Depends(get_current_user)):
+@router.post('/skills', response_model=SkillResponse)
+async def create_skill(item: SkillCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     # check if skill already exists
-    existing_skill = await Skill.find_one(Skill.name == skill.name, Skill.user_id == ObjectId(current_user.id))
-    if existing_skill:
-        raise HTTPException(
-            status_code=400, 
-            detail=Error(
-                message='Skill already exists', 
-                status_code=400
-            ).model_dump()
-        )
+    existing = (await db.execute(select(Skill).where(Skill.name == item.name, Skill.user_id == current_user.id))).scalars().first()
+    if existing:
+        raise error(400, 'Skill already exists')
 
-    new_skill = {**skill.model_dump(), 'user_id': current_user.id}
-    skill_created = await Skill(**new_skill).insert()
-    return skill_created
-
+    new_item = Skill(**item.model_dump(), user_id=current_user.id)
+    db.add(new_item)
+    await db.commit()
+    return new_item
 
 # update skill
-@router.put('/skills/{skill_id}', response_model=Skill)
-async def update_skill(skill_id: str, skill: SkillUpdate, current_user: User = Depends(get_current_user)):
-    updated_skill = await Skill.get(skill_id)
-    if updated_skill is None:
-        raise HTTPException(
-            status_code=404, 
-            detail=Error(
-                message='Skill not found', 
-                status_code=404
-            ).model_dump()
-        )
-    if updated_skill.user_id != ObjectId(current_user.id):
-        raise HTTPException(
-            status_code=403, 
-            detail=Error(
-                message='You are not allowed to update this skill', 
-                status_code=403
-            ).model_dump()
-        )
-    for key, value in skill.model_dump().items():
-        setattr(updated_skill, key, value)
-    updated_skill.updated_at = datetime.now(timezone.utc) # type: ignore
-    await updated_skill.save()
-    return updated_skill
+@router.put('/skills/{item_id}', response_model=SkillResponse)
+async def update_skill(item_id: UUID, item: SkillUpdate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    target = await get_owned(db, Skill, item_id, current_user, 'Skill', 'update')
+    return await apply_update(db, target, item.model_dump(exclude_unset=True))
 
 # delete skill
-@router.delete('/skills/{skill_id}', response_model=dict)
-async def delete_skill(skill_id: str, current_user: User = Depends(get_current_user)):
-    target_skill = await Skill.get(skill_id)
-    if target_skill is None:
-        raise HTTPException(
-            status_code=404, 
-            detail=Error(
-                message='Skill not found', 
-                status_code=404
-            ).model_dump()
-        )
-    if target_skill.user_id != ObjectId(current_user.id):
-        raise HTTPException(
-            status_code=403, 
-            detail=Error(
-                message='You are not allowed to delete this skill', 
-                status_code=403
-            ).model_dump()
-        )
-    await target_skill.delete()
+@router.delete('/skills/{item_id}', response_model=dict)
+async def delete_skill(item_id: UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    target = await get_owned(db, Skill, item_id, current_user, 'Skill', 'delete')
+    await db.delete(target)
+    await db.commit()
     return {'message': 'Skill deleted successfully'}

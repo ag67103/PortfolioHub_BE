@@ -1,23 +1,22 @@
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from typing import AsyncIterator
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./app/db/test.db"
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase
 
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
+from app.config import settings
 
-# Used to create database sessions for each request
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Base class for ORM models
-Base = declarative_base()
+class Base(DeclarativeBase):
+    """Base class for all ORM models."""
 
-# Dependency for FastAPI routes to get a database session
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+
+engine = create_async_engine(settings.async_database_url, pool_pre_ping=True)
+
+# expire_on_commit=False so objects stay readable after commit (responses are built after commit)
+SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+
+async def get_db() -> AsyncIterator[AsyncSession]:
+    """FastAPI dependency: one session per request (shared by all dependencies of that request)."""
+    async with SessionLocal() as session:
+        yield session

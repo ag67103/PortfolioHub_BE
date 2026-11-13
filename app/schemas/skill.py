@@ -1,8 +1,8 @@
-from unicodedata import category
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
-from beanie import PydanticObjectId
+from uuid import UUID
+from app.schemas.base import ItemResponse
 
 class SkillBase(BaseModel):
     name: str
@@ -15,12 +15,8 @@ class SkillCreate(SkillBase):
 class SkillUpdate(SkillBase):
     name: Optional[str] = None
     category: Optional[str] = None
-    proficiency: Optional[int] = Field(ge=0, le=100)
+    proficiency: Optional[int] = Field(default=None, ge=0, le=100)
 
-class Skill(SkillBase):
-    id: PydanticObjectId
+class SkillResponse(ItemResponse, SkillBase):
     created_at: datetime
     updated_at: datetime
-
-    class Config:
-        from_attributes = True

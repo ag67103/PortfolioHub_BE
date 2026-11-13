@@ -1,22 +1,26 @@
-from beanie import Document, PydanticObjectId
-from datetime import datetime, timezone, date
+import uuid
+from datetime import date, datetime
 from typing import List, Optional
 
-class Project(Document):
-    user_id: PydanticObjectId
-    title: str
-    description: str
-    technologies: List[str]
-    live_url: Optional[str] = None
-    code_url: Optional[str] = None
-    image_url: Optional[str] = None
-    start_date: date
-    end_date: Optional[date] = None
-    created_at: datetime = datetime.now(timezone.utc)
-    updated_at: datetime = datetime.now(timezone.utc)
+from sqlalchemy import ARRAY, Date, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
 
-    class Settings:
-        name = "projects"
-        indexes = [
-            "title",
-        ]
+from app.db.database import Base
+from app.models.base import created_at_col, updated_at_col, user_fk, uuid_pk
+
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = user_fk()
+    title: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str] = mapped_column(Text)
+    technologies: Mapped[List[str]] = mapped_column(ARRAY(Text), default=list)
+    live_url: Mapped[Optional[str]] = mapped_column(Text)
+    code_url: Mapped[Optional[str]] = mapped_column(Text)
+    image_url: Mapped[Optional[str]] = mapped_column(Text)
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[Optional[date]] = mapped_column(Date)
+    created_at: Mapped[datetime] = created_at_col()
+    updated_at: Mapped[datetime] = updated_at_col()

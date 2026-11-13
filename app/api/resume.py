@@ -12,12 +12,17 @@ import tempfile
 from pathlib import Path
 from app.utils.latex_compiler import compile_latex_to_pdf
 from app.ResumeGenerator.templates.resume import Resume
-from beanie import PydanticObjectId
+from uuid import UUID
+from fastapi import Depends
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.database import get_db
+from app.models.base import to_dict
 
 router = APIRouter()
 
 @router.get('/latex')
-async def get_resume_latex(user_id: PydanticObjectId = Query(..., description="User ID for the resume to generate")):
+async def get_resume_latex(user_id: UUID = Query(..., description="User ID for the resume to generate"), db: AsyncSession = Depends(get_db)):
     """
     Generate and download resume PDF using LaTeX template for the specified user.
     This endpoint is public and does not require authentication.
@@ -25,29 +30,30 @@ async def get_resume_latex(user_id: PydanticObjectId = Query(..., description="U
     """
     try:
         # Get user by ID
-        user = await User.get(user_id)
+        user = await db.get(User, user_id)
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
         
         # Get user data
-        user_data = user.model_dump(exclude={"hashed_password"})
+        user_data = to_dict(user)
+        user_data.pop("hashed_password", None)
         
         # Get all related data
         
-        experiences = await Experience.find(Experience.user_id == user_id).to_list()
-        experiences.sort(key=lambda x: x.end_date if x.end_date else x.start_date, reverse=True)
+        experiences = (await db.execute(select(Experience).where(Experience.user_id == user_id))).scalars().all()
+        experiences = sorted(experiences, key=lambda x: x.end_date if x.end_date else x.start_date, reverse=True)
         
-        educations = await Education.find(Education.user_id == user_id).to_list()
-        educations.sort(key=lambda x: x.end_date if x.end_date else x.start_date, reverse=True)
+        educations = (await db.execute(select(Education).where(Education.user_id == user_id))).scalars().all()
+        educations = sorted(educations, key=lambda x: x.end_date if x.end_date else x.start_date, reverse=True)
         
-        projects = await Project.find(Project.user_id == user_id).to_list()
-        projects.sort(key=lambda x: x.end_date if x.end_date else x.start_date, reverse=True)
+        projects = (await db.execute(select(Project).where(Project.user_id == user_id))).scalars().all()
+        projects = sorted(projects, key=lambda x: x.end_date if x.end_date else x.start_date, reverse=True)
         
-        skills = await Skill.find(Skill.user_id == user_id).to_list()
+        skills = (await db.execute(select(Skill).where(Skill.user_id == user_id))).scalars().all()
         
-        certifications = await Certification.find(Certification.user_id == user_id).to_list()
+        certifications = (await db.execute(select(Certification).where(Certification.user_id == user_id))).scalars().all()
         
-        awards = await Award.find(Award.user_id == user_id).to_list()
+        awards = (await db.execute(select(Award).where(Award.user_id == user_id))).scalars().all()
         
         # Convert to dict format and format dates
         def format_date(date_obj):
@@ -61,32 +67,32 @@ async def get_resume_latex(user_id: PydanticObjectId = Query(..., description="U
         
         experiences_data = []
         for exp in experiences:
-            exp_dict = exp.model_dump()
+            exp_dict = to_dict(exp)
             exp_dict['start_date'] = format_date(exp.start_date)
             exp_dict['end_date'] = format_date(exp.end_date) if exp.end_date else None
             experiences_data.append(exp_dict)
         
         educations_data = []
         for edu in educations:
-            edu_dict = edu.model_dump()
+            edu_dict = to_dict(edu)
             edu_dict['start_date'] = format_date(edu.start_date)
             edu_dict['end_date'] = format_date(edu.end_date) if edu.end_date else None
             educations_data.append(edu_dict)
         
         projects_data = []
         for proj in projects:
-            proj_dict = proj.model_dump()
+            proj_dict = to_dict(proj)
             # Format dates the same way as experience (convert epoch to date string)
             proj_dict['start_date'] = format_date(proj.start_date)
             proj_dict['end_date'] = format_date(proj.end_date) if proj.end_date else None
             projects_data.append(proj_dict)
         
-        skills_data = [skill.model_dump() for skill in skills]
-        certifications_data = [cert.model_dump() for cert in certifications]
+        skills_data = [to_dict(skill) for skill in skills]
+        certifications_data = [to_dict(cert) for cert in certifications]
         
         awards_data = []
         for award in awards:
-            award_dict = award.model_dump()
+            award_dict = to_dict(award)
             # Format issue_date the same way as other dates
             award_dict['issue_date'] = format_date(award.issue_date) if award.issue_date else None
             awards_data.append(award_dict)
@@ -109,11 +115,12 @@ async def get_resume_latex(user_id: PydanticObjectId = Query(..., description="U
             # Read PDF bytes
             pdf_bytes = pdf_file.read_bytes()
             
-            # Generate filename
-            first_name = user_data.get('first_name', '')
-            last_name = user_data.get('last_name', '')
-            filename = f"{first_name}_{last_name}_Resume.pdf".strip() or "Resume.pdf"
-            filename = filename.replace(' ', '_')
+            # Generate filename — strip characters that could break the Content-Disposition header
+            import re as _re
+            first_name = _re.sub(r'[^\w\s-]', '', user_data.get('first_name', '') or '')
+            last_name = _re.sub(r'[^\w\s-]', '', user_data.get('last_name', '') or '')
+            raw = f"{first_name}_{last_name}_Resume.pdf".strip('_')
+            filename = raw.replace(' ', '_') or "Resume.pdf"
             
             # Return PDF as response
             return Response(

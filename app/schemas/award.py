@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from datetime import date, datetime
-from beanie import PydanticObjectId
+from uuid import UUID
+from app.schemas.base import ItemResponse
 from typing import Optional
 
 class AwardBase(BaseModel):
@@ -13,8 +14,13 @@ class AwardBase(BaseModel):
 class AwardCreate(AwardBase):
     pass
 
-class Award(AwardBase):
-    id: PydanticObjectId
-    user_id: PydanticObjectId
+class AwardUpdate(BaseModel):
+    name: Optional[str] = None
+    issuer: Optional[str] = None
+    issue_date: Optional[date] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+
+class AwardResponse(ItemResponse, AwardBase):
     created_at: datetime
     updated_at: datetime

@@ -1,7 +1,7 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from datetime import datetime
 from typing import Optional, List
-from beanie import PydanticObjectId
+from uuid import UUID
 
 
 class MessageCreatedByAuthenticatedUser(BaseModel):
@@ -14,19 +14,21 @@ class MessageCreatedByUnauthenticatedUser(BaseModel):
     senderEmail: EmailStr
     messageSubject: Optional[str] = None  # Optional subject, will use default if not provided
     messageContent: str
-    recipientUserId: PydanticObjectId # Portfolio owner's user ID who receives the message
+    recipientUserId: UUID # Portfolio owner's user ID who receives the message
 
 class MessageCreatedResponse(BaseModel):
-    id: PydanticObjectId
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
 
 class MessageResponse(BaseModel):
-    id: PydanticObjectId
-    conversationId: PydanticObjectId # Conversation ID to group related messages (required)
-    senderName: str
-    senderEmail: EmailStr
-    senderUserId: Optional[PydanticObjectId] = None # Sender's user ID (if authenticated)
-    recipientUserId: PydanticObjectId # Portfolio owner's user ID who receives the message
-    recipientEmail: Optional[EmailStr] = None
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    conversationId: UUID # Conversation ID to group related messages (required)
+    senderName: Optional[str] = None
+    senderEmail: Optional[str] = None
+    senderUserId: Optional[UUID] = None # Sender's user ID (if authenticated)
+    recipientUserId: UUID # Portfolio owner's user ID who receives the message
+    recipientEmail: Optional[str] = None
     recipientName: Optional[str] = None
     messageSubject: Optional[str] = None  # Optional subject
     messageContent: str
@@ -40,4 +42,4 @@ class MessageCountResponse(BaseModel):
     total: int
 
 class ReadMessageBody(BaseModel):
-    messageIds: List[PydanticObjectId] = Field(description="List of message IDs to mark as read")
+    messageIds: List[UUID] = Field(description="List of message IDs to mark as read")

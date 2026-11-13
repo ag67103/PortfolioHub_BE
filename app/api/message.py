@@ -1,87 +1,78 @@
-import re
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Optional
+from uuid import UUID, uuid4
+from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+from ..db.database import get_db
 from ..models.message import Message
 from ..schemas.message import MessageCreatedByAuthenticatedUser, MessageCreatedByUnauthenticatedUser, MessageCreatedResponse, MessageResponse, MessageCountResponse, ReadMessageBody
 from app.utils.auth import get_current_user
 from ..models.user import User
 from datetime import datetime, timezone
-from beanie import PydanticObjectId
 from app.schemas.error import Error
 from app.websocket import manager
 
 router = APIRouter()
 
 def evaluate_message_read_status(messages: List[Message], current_user: User):
-    for message in messages:
-        message.isRead = message.isRead or message.senderUserId == current_user.id
-    return messages
+    # Sent messages are always considered read. Only the response is affected (not saved).
+    return [
+        MessageResponse.model_validate(m).model_copy(update={"isRead": m.isRead or m.senderUserId == current_user.id})
+        for m in messages
+    ]
 
 
 def serialize_message(message: Message) -> dict:
-    data = message.model_dump()
-    data["id"] = str(message.id)
-    data["_id"] = str(message.id)
-    data["conversationId"] = str(data["conversationId"])  # conversationId is required
-    if data.get("senderUserId"):
-        data["senderUserId"] = str(data["senderUserId"])
-    if data.get("recipientUserId"):
-        data["recipientUserId"] = str(data["recipientUserId"])
-    data["created_at"] = message.created_at.isoformat()
-    data["updated_at"] = message.updated_at.isoformat()
-    return data
+    return {
+        "id": str(message.id),
+        "_id": str(message.id),
+        "conversationId": str(message.conversationId),
+        "senderName": message.senderName,
+        "senderEmail": message.senderEmail,
+        "senderUserId": str(message.senderUserId) if message.senderUserId else None,
+        "recipientUserId": str(message.recipientUserId),
+        "recipientEmail": message.recipientEmail,
+        "recipientName": message.recipientName,
+        "messageSubject": message.messageSubject,
+        "messageContent": message.messageContent,
+        "isDeletedForSender": message.isDeletedForSender,
+        "isDeletedForRecipient": message.isDeletedForRecipient,
+        "isRead": message.isRead,
+        "created_at": message.created_at.isoformat(),
+        "updated_at": message.updated_at.isoformat(),
+    }
 
 
 async def find_or_create_conversation_id(
+    db: AsyncSession,
     sender_email: str,
     recipient_email: str,
-    sender_user_id: Optional[PydanticObjectId] = None,
-    recipient_user_id: Optional[PydanticObjectId] = None
-) -> PydanticObjectId:
+    sender_user_id: Optional[UUID] = None,
+    recipient_user_id: Optional[UUID] = None
+) -> UUID:
     """
     Find existing conversationId between two participants, or create a new one.
     Looks for messages where participants match (by email or userId).
     Always returns a conversationId.
     """
-    # Build query conditions for matching participants
-    or_conditions = []
-    
     # Match by email addresses (bidirectional)
-    or_conditions.append({
-        "senderEmail": sender_email,
-        "recipientEmail": recipient_email
-    })
-    or_conditions.append({
-        "senderEmail": recipient_email,
-        "recipientEmail": sender_email
-    })
-    
+    conditions = [
+        and_(Message.senderEmail == sender_email, Message.recipientEmail == recipient_email),
+        and_(Message.senderEmail == recipient_email, Message.recipientEmail == sender_email),
+    ]
+
     # If we have user IDs, also match by them (bidirectional)
     if sender_user_id and recipient_user_id:
-        or_conditions.append({
-            "senderUserId": sender_user_id,
-            "recipientUserId": recipient_user_id
-        })
-        or_conditions.append({
-            "senderUserId": recipient_user_id,
-            "recipientUserId": sender_user_id
-        })
-    
-    # Find the most recent message in this conversation that has a conversationId
-    existing_messages = await Message.find({
-        "$and": [
-            {"conversationId": {"$ne": None}},  # Only messages with conversationId
-            {"$or": or_conditions}
-        ]
-    }).sort("-created_at").limit(1).to_list()
-    
-    if existing_messages and len(existing_messages) > 0:
-        existing_message = existing_messages[0]
-        if existing_message and existing_message.conversationId:
-            return existing_message.conversationId
-    
-    # No existing conversation found, create a new conversationId
-    return PydanticObjectId()
+        conditions.append(and_(Message.senderUserId == sender_user_id, Message.recipientUserId == recipient_user_id))
+        conditions.append(and_(Message.senderUserId == recipient_user_id, Message.recipientUserId == sender_user_id))
+
+    # Most recent message between these participants
+    existing_id = (await db.execute(
+        select(Message.conversationId).where(or_(*conditions)).order_by(Message.created_at.desc()).limit(1)
+    )).scalar_one_or_none()
+
+    # No existing conversation found -> create a new conversationId
+    return existing_id or uuid4()
 
 
 async def notify_new_message(message_doc: Message, recipient_user_id: str, sender_user_id: Optional[str] = None):
@@ -105,9 +96,9 @@ async def notify_messages_read(message_ids: List[str], user_ids: List[str]):
         await manager.send_personal_message(user_id, payload)
 
 @router.post('/send', response_model=MessageCreatedResponse)
-async def message(message: MessageCreatedByAuthenticatedUser, current_user: User = Depends(get_current_user)):
+async def message(message: MessageCreatedByAuthenticatedUser, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Create a new authenticated user message"""
-    recipient_user = await User.find_one(User.email == message.recipientEmail)
+    recipient_user = (await db.execute(select(User).where(User.email == message.recipientEmail))).scalars().first()
     if not recipient_user:
         raise HTTPException(
             status_code=404, 
@@ -133,6 +124,7 @@ async def message(message: MessageCreatedByAuthenticatedUser, current_user: User
 
     # Find or create conversationId (always returns a conversationId)
     conversation_id = await find_or_create_conversation_id(
+        db,
         sender_email=current_user.email,
         recipient_email=recipient_user.email,
         sender_user_id=current_user.id,
@@ -157,14 +149,16 @@ async def message(message: MessageCreatedByAuthenticatedUser, current_user: User
         'created_at': current_time,
         'updated_at': current_time,
     }
-    message_created = await Message(**new_message).insert()
+    message_created = Message(**new_message)
+    db.add(message_created)
+    await db.commit()
     await notify_new_message(message_created, str(recipient_user.id), str(current_user.id))
     return message_created
 
 @router.post('/send/unauthenticated', response_model=MessageCreatedResponse)
-async def message(message: MessageCreatedByUnauthenticatedUser):
+async def unauthenticated_message(message: MessageCreatedByUnauthenticatedUser, db: AsyncSession = Depends(get_db)):
     """Create a new unauthenticated user message"""
-    recipient_user = await User.get(message.recipientUserId)
+    recipient_user = await db.get(User, message.recipientUserId)
     if not recipient_user:
         raise HTTPException(
             status_code=404, 
@@ -176,6 +170,7 @@ async def message(message: MessageCreatedByUnauthenticatedUser):
     
     # Find or create conversationId (always returns a conversationId)
     conversation_id = await find_or_create_conversation_id(
+        db,
         sender_email=message.senderEmail,
         recipient_email=recipient_user.email,
         sender_user_id=None,  # Unauthenticated sender has no userId
@@ -197,72 +192,64 @@ async def message(message: MessageCreatedByUnauthenticatedUser):
         'updated_at': current_time
     }
 
-    print(new_message)
-    message_created = await Message(**new_message).insert()
+    message_created = Message(**new_message)
+    db.add(message_created)
+    await db.commit()
     await notify_new_message(message_created, str(recipient_user.id))
     return message_created
 
 @router.get('', response_model=List[MessageResponse])
-async def get_all_messages_list_for_user(current_user: User = Depends(get_current_user)):
-    """Get all messages received by the current user"""
-    messages = await Message.find({
-        "$or": [
-            {
-                "recipientUserId": current_user.id,
-                "isDeletedForRecipient": False
-            },
-            {
-                "senderUserId": current_user.id,
-                "isDeletedForSender": False
-            }
-        ]
-    }).to_list()
+async def get_all_messages_list_for_user(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Get all messages sent or received by the current user"""
+    messages = (await db.execute(
+        select(Message).where(or_(
+            and_(Message.recipientUserId == current_user.id, Message.isDeletedForRecipient.is_(False)),
+            and_(Message.senderUserId == current_user.id, Message.isDeletedForSender.is_(False)),
+        )).order_by(Message.created_at)
+    )).scalars().all()
 
-    messages = evaluate_message_read_status(messages, current_user)
-    return messages
+    return evaluate_message_read_status(list(messages), current_user)
 
 @router.get("/count", response_model=MessageCountResponse)
-async def get_message_count(current_user: User = Depends(get_current_user)):
+async def get_message_count(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Get count of messages by the current user"""
-    messages = await Message.find({
-        "$or": [
-            {
-                "recipientUserId": current_user.id,
-                "isDeletedForRecipient": False
-            },
-            {
-                "senderUserId": current_user.id,
-                "isDeletedForSender": False
-            }
-        ]
-    }).to_list()
+    async def count(*conditions) -> int:
+        return (await db.execute(select(func.count()).select_from(Message).where(*conditions))).scalar_one()
 
-    messages = evaluate_message_read_status(messages, current_user)
-    
-    read_count = len([message for message in messages if message.isRead])
-    unread_count = len([message for message in messages if not message.isRead])
-    total_count = len(messages)
-    
+    recipient_total = await count(Message.recipientUserId == current_user.id, Message.isDeletedForRecipient.is_(False))
+    sender_total = await count(Message.senderUserId == current_user.id, Message.isDeletedForSender.is_(False))
+
+    # Received messages not yet read (sent messages are always considered read)
+    unread_count = await count(
+        Message.recipientUserId == current_user.id,
+        Message.isRead.is_(False),
+        Message.isDeletedForRecipient.is_(False),
+    )
+
+    total_count = recipient_total + sender_total
     return MessageCountResponse(
-        read=read_count, 
-        unread=unread_count, 
+        read=total_count - unread_count,
+        unread=unread_count,
         total=total_count
     )
 
 @router.put('/read', response_model=dict)
-async def mark_message_as_read(read_message_body: ReadMessageBody, current_user: User = Depends(get_current_user)):
+async def mark_message_as_read(read_message_body: ReadMessageBody, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Mark all messages in the list as read"""
-    message_ids = [PydanticObjectId(message_id) for message_id in read_message_body.messageIds]
+    message_ids = list(read_message_body.messageIds)
 
-    await Message.find({
-        "$and": [
-            {"_id": {"$in": message_ids}},
-            {"recipientUserId": current_user.id},
-            {"isDeletedForRecipient": False}
-        ]
-    }).update({"$set": {"isRead": True, "updated_at": datetime.now(timezone.utc)}})
+    await db.execute(
+        update(Message)
+        .where(
+            Message.id.in_(message_ids),
+            Message.recipientUserId == current_user.id,
+            Message.isDeletedForRecipient.is_(False),
+        )
+        .values(isRead=True, updated_at=datetime.now(timezone.utc))
+    )
+    await db.commit()
 
-    updated_messages = await Message.find({"_id": {"$in": message_ids}}).to_list()
+    updated_messages = (await db.execute(select(Message).where(Message.id.in_(message_ids)))).scalars().all()
     message_ids_str = [str(msg.id) for msg in updated_messages]
     participant_ids = {str(current_user.id)}
     for message in updated_messages:
@@ -274,19 +261,14 @@ async def mark_message_as_read(read_message_body: ReadMessageBody, current_user:
     return {"message": "Messages marked as read successfully"}
 
 @router.delete("/{message_id}", response_model=dict)
-async def delete_message(message_id: PydanticObjectId, current_user: User = Depends(get_current_user)):
+async def delete_message(message_id: UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Delete a message"""
-    message = await Message.find_one({
-        "$and": [
-            {"_id": message_id},
-            {
-                "$or": [
-                    {"senderUserId": current_user.id},
-                    {"recipientUserId": current_user.id}
-                ]
-            }
-        ]
-    })
+    message = (await db.execute(
+        select(Message).where(
+            Message.id == message_id,
+            or_(Message.senderUserId == current_user.id, Message.recipientUserId == current_user.id),
+        )
+    )).scalars().first()
     message_found = False
 
     # Message is sent by the current user
@@ -308,26 +290,22 @@ async def delete_message(message_id: PydanticObjectId, current_user: User = Depe
         )
 
     if message.isDeletedForSender and message.isDeletedForRecipient:
-        await message.delete()
+        await db.delete(message)
     else:
-        await message.save()
+        message.updated_at = datetime.now(timezone.utc)
+    await db.commit()
     return {"message": "Message deleted successfully"}
 
 @router.delete("/conversation/{conversation_id}", response_model=dict)
-async def delete_conversation(conversation_id: PydanticObjectId, current_user: User = Depends(get_current_user)):
+async def delete_conversation(conversation_id: UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Delete all messages in a conversation"""
     # Find all messages in this conversation where the current user is a participant
-    messages = await Message.find({
-        "$and": [
-            {"conversationId": conversation_id},
-            {
-                "$or": [
-                    {"senderUserId": current_user.id},
-                    {"recipientUserId": current_user.id}
-                ]
-            }
-        ]
-    }).to_list()
+    messages = (await db.execute(
+        select(Message).where(
+            Message.conversationId == conversation_id,
+            or_(Message.senderUserId == current_user.id, Message.recipientUserId == current_user.id),
+        )
+    )).scalars().all()
     
     if not messages:
         raise HTTPException(
@@ -361,10 +339,11 @@ async def delete_conversation(conversation_id: PydanticObjectId, current_user: U
             
             # If both parties have deleted it, permanently delete the message
             if message.isDeletedForSender and message.isDeletedForRecipient:
-                await message.delete()
+                await db.delete(message)
             else:
                 # Otherwise, just update the flags (soft delete)
-                await message.save()
+                message.updated_at = datetime.now(timezone.utc)
+    await db.commit()
     
     return {
         "message": f"Conversation deleted successfully",

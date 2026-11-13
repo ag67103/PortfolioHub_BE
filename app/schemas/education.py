@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from datetime import date, datetime
-from beanie import PydanticObjectId
+from uuid import UUID
+from app.schemas.base import ItemResponse
 from typing import Optional
 
 class EducationBase(BaseModel):
@@ -8,16 +9,18 @@ class EducationBase(BaseModel):
     degree: str
     start_date: date
     end_date: Optional[date] = None
-    description: str
+    description: Optional[str] = None
     
 class EducationCreate(EducationBase):
     pass
 
-class Education(EducationBase):
-    id: PydanticObjectId
-    user_id: PydanticObjectId
-    created_at: datetime 
-    updated_at: datetime
+class EducationUpdate(BaseModel):
+    institution: Optional[str] = None
+    degree: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    description: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+class EducationResponse(ItemResponse, EducationBase):
+    created_at: datetime
+    updated_at: datetime
