@@ -1,16 +1,5 @@
-# Use Python 3.11 slim image as base
+# Python 3.11 slim base image (the resume PDF is generated in pure Python, no system packages needed)
 FROM python:3.11-slim
-
-# Install LaTeX and required packages
-# This installs a minimal TeX Live distribution with pdflatex
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    texlive-latex-base \
-    texlive-latex-extra \
-    texlive-fonts-recommended \
-    texlive-fonts-extra \
-    texlive-lang-english \
-    && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app

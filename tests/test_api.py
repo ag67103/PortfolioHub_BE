@@ -292,4 +292,13 @@ def test_websocket_rejects_bad_token(client):
 # ---------- resume ----------
 
 def test_resume_unknown_user(client):
-    assert client.get(f"/resume/latex?user_id={uuid.uuid4()}").status_code in (404, 500)
+    assert client.get(f"/resume/latex?user_id={uuid.uuid4()}").status_code == 404
+
+
+def test_resume_pdf(client, alice):
+    client.post("/experiences", json={"title": "Dev & Ops", "company": "ACME <Inc>", "description": "Did 100% of $things\nSecond line",
+                                      "technologies": ["go"], "start_date": "2022-01-01"}, headers=alice["headers"])
+    client.post("/skills", json={"name": "Rust", "category": "Languages", "proficiency": 80}, headers=alice["headers"])
+    r = client.get(f"/resume/latex?user_id={alice['id']}")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
+    assert r.content.startswith(b"%PDF") and "Resume.pdf" in r.headers["content-disposition"]

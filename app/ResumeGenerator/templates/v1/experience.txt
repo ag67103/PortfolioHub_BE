@@ -1,5 +1,0 @@
-\section{EXPERIENCE} {
-    \resumeSubHeadingListStart
-        <EXPERIENCE_BODY>
-    \resumeSubHeadingListEnd
-}

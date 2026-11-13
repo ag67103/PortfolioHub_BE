@@ -1,5 +1,0 @@
-\section{TECHNICAL SKILLS} {
-    \begin{itemize}[leftmargin=0.15in, label={}]
-        <SKILL_BODY>
-    \end{itemize}
-}

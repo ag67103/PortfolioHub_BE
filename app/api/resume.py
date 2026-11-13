@@ -8,10 +8,7 @@ from app.models.skill import Skill
 from app.models.certification import Certification
 from app.models.award import Award
 from datetime import datetime
-import tempfile
-from pathlib import Path
-from app.utils.latex_compiler import compile_latex_to_pdf
-from app.ResumeGenerator.templates.resume import Resume
+from app.ResumeGenerator.pdf_resume import build_resume_pdf
 from uuid import UUID
 from fastapi import Depends
 from sqlalchemy import select
@@ -24,7 +21,8 @@ router = APIRouter()
 @router.get('/latex')
 async def get_resume_latex(user_id: UUID = Query(..., description="User ID for the resume to generate"), db: AsyncSession = Depends(get_db)):
     """
-    Generate and download resume PDF using LaTeX template for the specified user.
+    Generate and download the resume PDF (ReportLab) for the specified user.
+    The path still says `latex` for backwards compatibility with the frontend.
     This endpoint is public and does not require authentication.
     Anyone can download any user's resume by providing their user_id.
     """
@@ -97,7 +95,7 @@ async def get_resume_latex(user_id: UUID = Query(..., description="User ID for t
             award_dict['issue_date'] = format_date(award.issue_date) if award.issue_date else None
             awards_data.append(award_dict)
 
-        latex_content = Resume().generate_resume(
+        pdf_bytes = build_resume_pdf(
             user_data=user_data,
             experiences=experiences_data,
             educations=educations_data,
@@ -106,35 +104,25 @@ async def get_resume_latex(user_id: UUID = Query(..., description="User ID for t
             certifications=certifications_data,
             awards=awards_data
         )
-        
-        # Create temporary directory for compilation
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            pdf_file = compile_latex_to_pdf(latex_content, temp_path)
-            
-            # Read PDF bytes
-            pdf_bytes = pdf_file.read_bytes()
-            
-            # Generate filename — strip characters that could break the Content-Disposition header
-            import re as _re
-            first_name = _re.sub(r'[^\w\s-]', '', user_data.get('first_name', '') or '')
-            last_name = _re.sub(r'[^\w\s-]', '', user_data.get('last_name', '') or '')
-            raw = f"{first_name}_{last_name}_Resume.pdf".strip('_')
-            filename = raw.replace(' ', '_') or "Resume.pdf"
-            
-            # Return PDF as response
-            return Response(
-                content=pdf_bytes,
-                media_type="application/pdf",
-                headers={
-                    "Content-Disposition": f'attachment; filename="{filename}"'
-                }
-            )
-        
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=500, detail=f"LaTeX template files not found: {str(e)}")
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=f"LaTeX compilation error: {str(e)}")
+
+        # Generate filename — strip characters that could break the Content-Disposition header
+        import re as _re
+        first_name = _re.sub(r'[^\w\s-]', '', user_data.get('first_name', '') or '')
+        last_name = _re.sub(r'[^\w\s-]', '', user_data.get('last_name', '') or '')
+        raw = f"{first_name}_{last_name}_Resume.pdf".strip('_')
+        filename = raw.replace(' ', '_') or "Resume.pdf"
+
+        # Return PDF as response
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()

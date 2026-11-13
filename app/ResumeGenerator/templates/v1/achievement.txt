@@ -1,5 +1,0 @@
-\section{ACHIEVEMENTS} {
-    \resumeSubHeadingListStart
-        <ACHIEVEMENT_BODY>
-    \resumeSubHeadingListEnd
-}

@@ -1,5 +1,0 @@
-\section{PROJECTS} {
-    \resumeSubHeadingListStart
-        <PROJECT_BODY>
-    \resumeSubHeadingListEnd
-}
