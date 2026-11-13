@@ -307,3 +307,135 @@ def test_resume_pdf(client, alice):
     concise = client.get(f"/resume/latex?user_id={alice['id']}").content
     full = client.get(f"/resume/latex?user_id={alice['id']}&full=true")
     assert full.status_code == 200 and len(full.content) > len(concise)
+
+
+# ---------- public link (slug), availability, link previews ----------
+
+def test_slug_and_profile_fields(client, alice, bob):
+    r = client.put("/portfolio/", json={"slug": "Alice-Dev", "address": "Pune, India", "open_to_work": True,
+                                         "portfolio_title": "Engineer <b>", "portfolio_description": "Line one.\nLine two."},
+                   headers=alice["headers"])
+    assert r.status_code == 200, r.text
+    p = r.json()["portfolio"]
+    assert p["slug"] == "alice-dev" and p["open_to_work"] is True and p["address"] == "Pune, India"
+
+    # resolve by slug (public) and by id; shape matches /user/{id}
+    by_slug = client.get("/user/slug/alice-dev")
+    assert by_slug.status_code == 200 and by_slug.json()["id"] == alice["id"] and by_slug.json()["slug"] == "alice-dev"
+    assert client.get("/user/slug/ALICE-DEV").status_code == 200           # case-insensitive
+    assert client.get("/user/slug/nobody-here").status_code == 404
+    assert client.get(f"/portfolio/user/{alice['id']}").json()["open_to_work"] is True
+
+    # slugs are unique, validated and can be cleared
+    assert client.put("/portfolio/", json={"slug": "alice-dev"}, headers=bob["headers"]).status_code == 409
+    for bad in ("ab", "has space", "-lead", "trail-", "double--hyphen", "dashboard", "x" * 41, "UPPER_case"):
+        assert client.put("/portfolio/", json={"slug": bad}, headers=bob["headers"]).status_code == 422, bad
+    assert client.put("/portfolio/", json={"slug": ""}, headers=alice["headers"]).json()["portfolio"]["slug"] is None
+    assert client.get("/user/slug/alice-dev").status_code == 404
+    client.put("/portfolio/", json={"slug": "alice-dev"}, headers=alice["headers"])
+
+
+def test_link_preview(client, alice):
+    for ref in ("alice-dev", alice["id"]):
+        r = client.get(f"/og/{ref}")
+        assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+        html = r.text
+        assert 'property="og:title" content="Alice | Portfolio"' in html or "| Portfolio" in html
+        assert 'property="og:image"' in html and f"/og/{ref}/image.png" in html
+        assert 'name="twitter:card" content="summary_large_image"' in html
+        assert "/u/alice-dev" in html                                          # canonical uses the slug
+        assert "Line one." in html and "Line two." not in html                 # only the first paragraph
+        assert "<b>" not in html                                               # user text is HTML-escaped
+        img = client.get(f"/og/{ref}/image.png")
+        assert img.status_code == 200 and img.headers["content-type"] == "image/png" and img.content[:8] == b"\x89PNG\r\n\x1a\n"
+    assert client.get("/og/missing-person").status_code == 404
+    assert client.get(f"/og/{uuid.uuid4()}").status_code == 404
+
+
+# ---------- spam protection on the public contact form ----------
+
+def test_contact_form_protection(client, alice):
+    from app.api import message as message_api
+    message_api._public_message_log.clear()
+    body = {"senderName": "Visitor", "senderEmail": "v2@example.com", "messageContent": "hello", "recipientUserId": alice["id"]}
+
+    # honeypot filled in -> looks successful, nothing is stored
+    before = len(client.get("/message", headers=alice["headers"]).json())
+    r = client.post("/message/send/unauthenticated", json={**body, "website": "http://spam.example"})
+    assert r.status_code == 200
+    assert len(client.get("/message", headers=alice["headers"]).json()) == before
+
+    # size limits
+    assert client.post("/message/send/unauthenticated", json={**body, "messageContent": "x" * 5001}).status_code == 422
+    assert client.post("/message/send/unauthenticated", json={**body, "senderName": ""}).status_code == 422
+
+    # at most 5 per IP per hour
+    codes = [client.post("/message/send/unauthenticated", json=body).status_code for _ in range(7)]
+    assert codes[:5] == [200] * 5 and codes[5:] == [429, 429]
+    message_api._public_message_log.clear()
+
+
+# ---------- live preview: can the project's site be embedded? ----------
+
+def test_embedding_rules():
+    from app.api.preview import evaluate_embedding as ev
+    me = "https://portfolio.example.com"
+    assert ev({}, me)[0] is True                                                        # no restrictions
+    assert ev({"x-frame-options": "DENY"}, me)[0] is False
+    assert ev({"x-frame-options": "SAMEORIGIN"}, me)[0] is False
+    assert ev({"content-security-policy": "default-src 'self'; frame-ancestors 'none'"}, me)[0] is False
+    assert ev({"content-security-policy": "frame-ancestors 'self'"}, me)[0] is False
+    assert ev({"content-security-policy": "frame-ancestors https://portfolio.example.com"}, me)[0] is True
+    assert ev({"content-security-policy": "frame-ancestors https://*.example.com"}, me)[0] is True
+    assert ev({"content-security-policy": "frame-ancestors https://other.com"}, me)[0] is False
+    # CSP frame-ancestors wins over X-Frame-Options, as in browsers
+    assert ev({"x-frame-options": "DENY", "content-security-policy": "frame-ancestors https://portfolio.example.com"}, me)[0] is True
+    assert ev({"content-security-policy-report-only": "frame-ancestors 'none'"}, me)[0] is True   # report-only is not enforced
+
+
+def test_ssrf_ip_rules():
+    from app.api.preview import _ip_is_public as pub
+    for good in ("8.8.8.8", "130.210.46.52", "64:ff9b::82d2:2e34", "2606:4700:4700::1111"):
+        assert pub(good), good
+    for bad in ("127.0.0.1", "10.0.0.5", "192.168.1.1", "172.16.0.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1",
+                "::1", "fe80::1", "fc00::1", "::ffff:127.0.0.1", "64:ff9b::7f00:1", "64:ff9b::a9fe:a9fe"):
+        assert not pub(bad), bad
+
+
+def test_embeddable_endpoint_and_ssrf_guard(client, alice, monkeypatch):
+    from app.api import preview
+    preview._cache.clear()
+    mk = lambda url: client.post("/projects", json={**PROJECT, "title": "P", "live_url": url}, headers=alice["headers"]).json()["_id"]
+    ok_id, blocked_id, local_id, none_id = mk("https://ok.example.com"), mk("https://blocked.example.com"), mk("http://127.0.0.1:8000/"), \
+        client.post("/projects", json={**PROJECT, "title": "NoLive", "live_url": None}, headers=alice["headers"]).json()["_id"]
+
+    async def fake_fetch(url):
+        return (200, {} if "ok." in url else {"x-frame-options": "DENY"}, url)
+    monkeypatch.setattr(preview, "_fetch_headers", fake_fetch)
+
+    assert client.get(f"/preview/embeddable/{ok_id}").json()["embeddable"] is True
+    blocked = client.get(f"/preview/embeddable/{blocked_id}").json()
+    assert blocked["embeddable"] is False and "X-Frame-Options" in blocked["reason"]
+    assert client.get(f"/preview/embeddable/{none_id}").json() == {"embeddable": False, "reason": "no live URL"}
+    assert client.get(f"/preview/embeddable/{uuid.uuid4()}").json()["embeddable"] is False
+
+    # internal addresses are refused by the real fetcher (SSRF guard)
+    monkeypatch.undo()
+    preview._cache.clear()
+    r = client.get(f"/preview/embeddable/{local_id}").json()
+    assert r["embeddable"] is False and "not public" in r["reason"]
+
+
+# ---------- blank optional links must not break saving ----------
+
+def test_blank_optional_urls_are_accepted(client, alice):
+    r = client.put("/portfolio/", json={"twitter_url": "", "instagram_url": "  ", "website_url": "", "github_url": "https://github.com/x"},
+                   headers=alice["headers"])
+    assert r.status_code == 200, r.text
+    p = r.json()["portfolio"]
+    assert p["twitter_url"] is None and p["instagram_url"] is None and p["website_url"] is None and p["github_url"] == "https://github.com/x"
+    assert client.put("/portfolio/", json={"twitter_url": "twitter.com/x"}, headers=alice["headers"]).status_code == 422   # still validated
+    pr = client.post("/projects", json={**PROJECT, "title": "Blank links", "live_url": "", "code_url": ""}, headers=alice["headers"])
+    assert pr.status_code == 200 and pr.json()["live_url"] is None and pr.json()["code_url"] is None
+    c = client.post("/certifications", json={"name": "N", "issuer": "I", "issue_date": "2023-01-01", "description": "d", "credential_url": ""}, headers=alice["headers"])
+    assert c.status_code == 200 and c.json()["credential_url"] is None

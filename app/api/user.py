@@ -6,13 +6,21 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
 from datetime import datetime, timezone
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 router = APIRouter()
 
 # Simple in-memory rate limiter: (ip, user_id) → last call timestamp
 _visitor_rate_cache: dict[str, datetime] = {}
 _VISITOR_RATE_LIMIT_SECONDS = 60
+
+# get user by public link name (/u/<slug>)
+@router.get('/user/slug/{slug}', response_model=UserResponse)
+async def get_user_by_slug(slug: str, db: AsyncSession = Depends(get_db)):
+    user = (await db.execute(select(User).where(User.slug == slug.lower()))).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 # get user by id
 @router.get('/user/{user_id}', response_model=UserResponse)

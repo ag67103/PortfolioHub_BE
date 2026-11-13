@@ -15,6 +15,10 @@ python-multipart>=0.0.6
 
 # Resume PDF generation (pure Python)
 reportlab>=4.0
+pillow>=10.1  # link-preview images
+
+# Live-preview embeddability check
+httpx>=0.27
 
 # Environment variables
 python-dotenv>=1.0.0

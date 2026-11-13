@@ -8,6 +8,9 @@ from app.schemas.base import ItemResponse
 def _validate_http_url(v: Optional[str]) -> Optional[str]:
     if v is None:
         return v
+    v = v.strip()
+    if v == '':
+        return None   # a blank optional link means "no link"
     if not v.startswith(('http://', 'https://')):
         raise ValueError('URL must start with http:// or https://')
     return v

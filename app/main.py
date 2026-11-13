@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import projects, skills, experience, educations, certifications, awards, about as portfolio, auth, user, message, resume
+from app.api import projects, skills, experience, educations, certifications, awards, about as portfolio, auth, user, message, resume, og, preview
 from app.utils.token_cleanup import cleanup_expired_access_tokens
 from app.config import settings
 from contextlib import asynccontextmanager
@@ -71,6 +71,8 @@ app.include_router(auth.router)
 app.include_router(user.router)
 app.include_router(message.router, prefix="/message")
 app.include_router(resume.router, prefix="/resume", tags=["resume"])
+app.include_router(og.router, prefix="/og", tags=["og"])
+app.include_router(preview.router, prefix="/preview", tags=["preview"])
 app.include_router(websocket_routes.router)
 
 @app.get("/")

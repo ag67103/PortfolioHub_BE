@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import ARRAY, DateTime, Enum as SAEnum, String, Text
+from sqlalchemy import ARRAY, Boolean, DateTime, Enum as SAEnum, String, Text, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.database import Base
@@ -38,6 +38,10 @@ class User(Base):
     phone: Mapped[Optional[str]] = mapped_column(String(50))
     address: Mapped[Optional[str]] = mapped_column(Text)
     profile_image_url: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Public link: /u/<slug> (optional, unique) and availability badge
+    slug: Mapped[Optional[str]] = mapped_column(String(60), unique=True, index=True)
+    open_to_work: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
     # Portfolio/About Information
     portfolio_title: Mapped[Optional[str]] = mapped_column(Text)

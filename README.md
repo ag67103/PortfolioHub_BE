@@ -6,6 +6,23 @@ FastAPI + PostgreSQL (SQLAlchemy 2.0 async, asyncpg) with Alembic migrations.
 
 Copy `.env.example` to `.env`. Main variables: `DATABASE_URL`, `SECRET_KEY`, `CORS_ORIGINS`.
 
+## Settings worth knowing
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `SECRET_KEY` | JWT signing key (long random string) |
+| `CORS_ORIGINS` | JSON list of allowed frontend origins |
+| `FRONTEND_URL` | Public URL of the frontend, e.g. `https://portfoliohub.thikana.cc`. Used for share links and link previews. |
+
+## Public profile links, link previews and live previews
+
+- A profile can have a short link name: `PUT /portfolio/` with `slug` -> `/u/<slug>` in the frontend; `GET /user/slug/<slug>` resolves it.
+- `GET /og/<slug-or-id>` returns the Open Graph / Twitter tags for a profile and `/og/<ref>/image.png` a generated 1200x630 preview image.
+  The frontend's nginx sends link-preview crawlers (LinkedIn, Slack, WhatsApp, ...) here instead of the single-page app.
+- `GET /preview/embeddable/<project_id>` tells the frontend whether a project's `live_url` may be shown in an iframe
+  (checks X-Frame-Options / CSP `frame-ancestors`; private and internal addresses are refused, results cached 10 minutes).
+
 ## Database
 
 ```bash

@@ -10,11 +10,13 @@ class MessageCreatedByAuthenticatedUser(BaseModel):
     recipientEmail: EmailStr
 
 class MessageCreatedByUnauthenticatedUser(BaseModel):
-    senderName: str
+    senderName: str = Field(min_length=1, max_length=100)
     senderEmail: EmailStr
-    messageSubject: Optional[str] = None  # Optional subject, will use default if not provided
-    messageContent: str
+    messageSubject: Optional[str] = Field(default=None, max_length=200)  # Optional subject, will use default if not provided
+    messageContent: str = Field(min_length=1, max_length=5000)
     recipientUserId: UUID # Portfolio owner's user ID who receives the message
+    # Honeypot: hidden from people in the form, so only bots fill it in
+    website: Optional[str] = Field(default=None, exclude=True)
 
 class MessageCreatedResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from typing import List, Optional
 from uuid import UUID, uuid4
 from sqlalchemy import and_, delete, func, or_, select, update
@@ -13,6 +13,23 @@ from app.schemas.error import Error
 from app.websocket import manager
 
 router = APIRouter()
+
+# Simple in-memory limit for the public contact form: per IP, per hour (resets on restart)
+_PUBLIC_MESSAGE_LIMIT = 5
+_PUBLIC_MESSAGE_WINDOW_S = 3600
+_public_message_log: dict = {}
+
+
+def _check_public_rate_limit(ip: str) -> None:
+    now = datetime.now(timezone.utc).timestamp()
+    recent = [t for t in _public_message_log.get(ip, []) if now - t < _PUBLIC_MESSAGE_WINDOW_S]
+    if len(recent) >= _PUBLIC_MESSAGE_LIMIT:
+        raise HTTPException(status_code=429, detail=Error(message="Too many messages. Please try again later.", status_code=429).model_dump())
+    recent.append(now)
+    _public_message_log[ip] = recent
+    if len(_public_message_log) > 10_000:  # keep memory bounded
+        for key in [k for k, v in _public_message_log.items() if not v or now - v[-1] > _PUBLIC_MESSAGE_WINDOW_S]:
+            del _public_message_log[key]
 
 def evaluate_message_read_status(messages: List[Message], current_user: User):
     # Sent messages are always considered read. Only the response is affected (not saved).
@@ -156,8 +173,12 @@ async def message(message: MessageCreatedByAuthenticatedUser, current_user: User
     return message_created
 
 @router.post('/send/unauthenticated', response_model=MessageCreatedResponse)
-async def unauthenticated_message(message: MessageCreatedByUnauthenticatedUser, db: AsyncSession = Depends(get_db)):
+async def unauthenticated_message(message: MessageCreatedByUnauthenticatedUser, request: Request, db: AsyncSession = Depends(get_db)):
     """Create a new unauthenticated user message"""
+    if (message.website or '').strip():
+        # Honeypot filled in: pretend it worked so bots don't retry, but store nothing
+        return MessageCreatedResponse(id=uuid4())
+    _check_public_rate_limit(request.client.host if request.client else 'unknown')
     recipient_user = await db.get(User, message.recipientUserId)
     if not recipient_user:
         raise HTTPException(

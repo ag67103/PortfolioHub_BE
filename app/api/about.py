@@ -4,18 +4,13 @@ from app.schemas.user import PortfolioUpdate
 from datetime import datetime, timezone
 from app.utils.auth import get_current_user
 from uuid import UUID
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
 
 router = APIRouter()
 
-# get portfolio by user id
-@router.get('/user/{user_id}')
-async def read_portfolio_by_user(user_id: UUID, db: AsyncSession = Depends(get_db)):
-    user = await db.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail='User not found')
-    
+def _portfolio(user: User) -> dict:
     return {
         'first_name': user.first_name,
         'middle_name': user.middle_name,
@@ -27,6 +22,9 @@ async def read_portfolio_by_user(user_id: UUID, db: AsyncSession = Depends(get_d
         'portfolio_awards': user.portfolio_awards or [],
         'title': user.title,
         'phone': user.phone,
+        'address': user.address,
+        'slug': user.slug,
+        'open_to_work': user.open_to_work,
         'github_url': user.github_url,
         'twitter_url': user.twitter_url,
         'instagram_url': user.instagram_url,
@@ -35,27 +33,18 @@ async def read_portfolio_by_user(user_id: UUID, db: AsyncSession = Depends(get_d
         'website_url': user.website_url
     }
 
+# get portfolio by user id
+@router.get('/user/{user_id}')
+async def read_portfolio_by_user(user_id: UUID, db: AsyncSession = Depends(get_db)):
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail='User not found')
+    return _portfolio(user)
+
 # get current user's portfolio
 @router.get('/')
 async def get_current_user_portfolio(current_user: User = Depends(get_current_user)):
-    return {
-        'first_name': current_user.first_name,
-        'middle_name': current_user.middle_name,
-        'last_name': current_user.last_name,
-        'portfolio_title': current_user.portfolio_title,
-        'portfolio_description': current_user.portfolio_description,
-        'portfolio_education': current_user.portfolio_education or [],
-        'portfolio_certifications': current_user.portfolio_certifications or [],
-        'portfolio_awards': current_user.portfolio_awards or [],
-        'title': current_user.title,
-        'phone': current_user.phone,
-        'github_url': current_user.github_url,
-        'twitter_url': current_user.twitter_url,
-        'instagram_url': current_user.instagram_url,
-        'linkedin_url': current_user.linkedin_url,
-        'leetcode_url': current_user.leetcode_url,
-        'website_url': current_user.website_url
-    }
+    return _portfolio(current_user)
 
 # update portfolio
 @router.put('/')
@@ -66,25 +55,13 @@ async def update_portfolio(portfolio: PortfolioUpdate, current_user: User = Depe
         for field, value in update_data.items():
             setattr(current_user, field, value)
         current_user.updated_at = datetime.now(timezone.utc)
-        await db.commit()
-    
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise HTTPException(status_code=409, detail='That link name is already taken')
+
     return {
         'message': 'Portfolio updated successfully',
-        'portfolio': {
-            'first_name': current_user.first_name,
-            'middle_name': current_user.middle_name,
-            'last_name': current_user.last_name,
-            'portfolio_title': current_user.portfolio_title,
-            'portfolio_description': current_user.portfolio_description,
-            'portfolio_education': current_user.portfolio_education or [],
-            'portfolio_certifications': current_user.portfolio_certifications or [],
-            'portfolio_awards': current_user.portfolio_awards or [],
-            'phone': current_user.phone,
-            'github_url': current_user.github_url,
-            'twitter_url': current_user.twitter_url,
-            'instagram_url': current_user.instagram_url,
-            'linkedin_url': current_user.linkedin_url,
-            'leetcode_url': current_user.leetcode_url,
-            'website_url': current_user.website_url
-        }
+        'portfolio': _portfolio(current_user)
     }
